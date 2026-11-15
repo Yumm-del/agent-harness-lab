@@ -1,0 +1,22 @@
+# repair：只改「工具失败后的处理」。
+# tool_retries=2 让 harness 在同一次 tool call 内自动重试；
+# repair_on_error=true 在仍然失败时给模型一条明确的修复提示。
+# 其余字段与 baseline 保持一致。
+name: repair
+description: Tool retries (2) plus an explicit repair hint after failures.
+model: deepseek-chat
+instruction: |
+  You are a careful autonomous agent. Complete the task exactly as specified.
+  Prefer reading real files over guessing. Keep intermediate work in the workspace.
+tools:
+  - list_files
+  - read_file
+  - write_file
+  - http_get
+  - run_python
+max_steps: 8
+temperature: 0.0
+max_tokens: 900
+context_policy: full
+tool_retries: 2
+repair_on_error: true

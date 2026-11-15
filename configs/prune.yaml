@@ -1,0 +1,22 @@
+# prune：只改「上下文策略」。
+# 保留最近 3 条 tool observation，更早的替换成 pruned 标记。
+# 目的：观察长链路任务里，压缩上下文是省钱还是丢关键证据。
+name: prune
+description: Prune older tool observations, keeping the last 3 intact.
+model: deepseek-chat
+instruction: |
+  You are a careful autonomous agent. Complete the task exactly as specified.
+  Prefer reading real files over guessing. Keep intermediate work in the workspace.
+tools:
+  - list_files
+  - read_file
+  - write_file
+  - http_get
+  - run_python
+max_steps: 8
+temperature: 0.0
+max_tokens: 900
+context_policy: prune
+context_window: 3
+tool_retries: 0
+repair_on_error: false

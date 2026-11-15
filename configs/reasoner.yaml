@@ -1,0 +1,21 @@
+# reasoner：与 baseline 完全相同的 harness，只换更强的模型。
+# 目的：把「模型能力」和「harness 能力」拆开——如果 reasoner 更强，
+# 但 repair 在弱模型上也能补回来，说明 harness 改动有独立价值。
+name: reasoner
+description: Same harness as baseline, stronger model (deepseek-reasoner).
+model: deepseek-reasoner
+instruction: |
+  You are a careful autonomous agent. Complete the task exactly as specified.
+  Prefer reading real files over guessing. Keep intermediate work in the workspace.
+tools:
+  - list_files
+  - read_file
+  - write_file
+  - http_get
+  - run_python
+max_steps: 8
+temperature: 0.0
+max_tokens: 1200
+context_policy: full
+tool_retries: 0
+repair_on_error: false

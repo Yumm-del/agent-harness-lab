@@ -1,0 +1,21 @@
+name: evolved
+description: AEvo-lite v0 自动生成（基于 baseline 的失败报告）：工具/步数/恢复类失败 → 开启 2 次自动重试与失败修复提示
+model: deepseek-chat
+instruction: 'You are a careful autonomous agent. Complete the task exactly as specified.
+
+  Prefer reading real files over guessing. Keep intermediate work in the workspace.
+
+  '
+tools:
+- list_files
+- read_file
+- write_file
+- http_get
+- run_python
+max_steps: 8
+temperature: 0.0
+max_tokens: 900
+context_policy: full
+context_window: 4
+tool_retries: 2
+repair_on_error: true
