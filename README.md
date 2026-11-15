@@ -11,11 +11,13 @@
 这个仓库把每次运行拆成 5 层：
 
 ```
-AgentSpec（Instruction / Context / Tools / Model）
+AgentSpec（Instruction / Context / Tools / Model / Architecture）
         ↓
-AgentRunner（loop / tool calls / retry / context policy）
+Planner（可选：只出计划，不调工具）
         ↓
-Trace（每步 messages、tool call、错误、token、延迟）
+AgentRunner / Executor（loop / tool calls / retry / context policy）
+        ↓
+Trace（messages、tool call、错误、token、延迟、handoff）
         ↓
 Validator（确定性检查，不靠模型自评）
         ↓
@@ -28,6 +30,8 @@ Report（成功率 / 步数 / token / P50/P95 / 失败分类 / 升级率）
 - 换更强的模型，能不能替代 harness 层的修复？
 - 压缩上下文是省钱还是丢关键证据？
 - 一个失败 episode 到底是“没规划”“工具报错没恢复”还是“算错了”？
+- 多智能体 planner/executor 比单 Agent 更好吗？代价是什么？
+- planner 说“重试”，和 harness 真的在工具层重试，差别在哪？
 - 录下来的 badcase，改完 harness 后能不能离线重放验证？
 
 ## 快速开始
@@ -87,7 +91,7 @@ harness-lab cascade --weak configs/baseline.yaml --strong configs/reasoner.yaml 
 - 可选的故障注入规则；
 - 确定性 validator（文件内容 / JSON / 数字），不依赖 LLM 裁判。
 
-## 四种配置 + 一种路由，只改一个变量
+## 六种配置 + 一种路由，只改一个变量
 
 | 配置 | 改了什么 | 目的 |
 |---|---|---|
@@ -95,6 +99,8 @@ harness-lab cascade --weak configs/baseline.yaml --strong configs/reasoner.yaml 
 | `repair` | `tool_retries=2` + 失败后注入修复提示 | 测 harness 层恢复能力 |
 | `prune` | 只保留最近 3 条 tool observation | 测上下文压缩的收益/代价 |
 | `reasoner` | 同一 harness，换 `deepseek-reasoner` | 把“模型能力”和“harness 能力”拆开 |
+| `multi_agent` | 加一次 planner 调用，计划注入 executor | 测多智能体协作的收益/成本 |
+| `multi_agent_repair` | `multi_agent` + `tool_retries=2` + 修复提示 | 测多智能体能否替代 harness 控制 |
 | `cascade` | 先跑 baseline，validator 失败才升级 reasoner | 测模型路由的成本-成功率 |
 
 `AgentSpec` 借用了 AOrchestra 的四元组思路：
@@ -112,6 +118,18 @@ repair_on_error: true
 ```
 
 换配置不需要改代码；trace 里保存完整 spec，回放时可以重建同一次运行。
+
+### 多智能体：planner / executor
+
+`multi_agent` 和 `multi_agent_repair` 只比 baseline 多一次 planner 调用：
+
+1. planner 拿到任务，输出 3–6 步计划（不调工具）；
+2. executor 把计划放进 system prompt，再走完全相同的 tool loop；
+3. trace 的每条 `llm_call` / `tool_call` 带 `agent` 字段，另有一条 `handoff` 事件记录计划、token 和延迟。
+
+planner 调用失败时不会中断 episode：记录 `llm_error` 和 `handoff(ok=false)`，executor 按无计划模式继续。这样多智能体是“可降级的增强”，而不是“多一个单点故障”。
+
+对应失败归因新增 `planner_error`：planner 没产出计划、executor 降级运行后仍然失败时，根因归到交接层。
 
 ## Trace：失败归因的证据链
 
@@ -142,6 +160,7 @@ repair_on_error: true
 | `format_error` | 输出不是合法 JSON |
 | `execution_wrong_result` | 文件存在、格式对，但内容错 |
 | `llm_error` | API/网络错误 |
+| `planner_error` | planner 调用失败或没产出计划，executor 降级运行后仍失败 |
 | `harness_error` | 一次 LLM 调用都没有，通常是 harness 自身问题 |
 
 分类是规则式的，不完美，但每个判断都能在 trace 里找到证据。面试时应该能逐条解释，而不是背一个分数。
@@ -257,6 +276,55 @@ cascade 比「始终用强模型」省 15.0% token，成功率相同。
 完整的逐任务矩阵、trace 摘录和复现命令见 [docs/RESULTS.md](docs/RESULTS.md)。
 <!-- RESULTS_END -->
 
+## 多智能体对照（2026-11-15）
+
+运行目录：`results/multi_agent/20261115-184940/`，3 配置 × 16 任务 × 3 次重复 = 144 个 episode，并发 4，总耗时 206.76 秒。`multi_agent` = baseline + planner；`multi_agent_repair` = multi_agent + `tool_retries=2 + repair_on_error`。
+
+| 配置 | 成功率 | 平均步数 | 平均 token/任务 | planner token | handoff | 缓存命中率 | P50 延迟 | P95 延迟 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline | 93.8% (45/48) | 3.8 | 4053 | — | — | 81.7% | 3734 ms | 4800 ms |
+| multi_agent | 93.8% (45/48) | 4.5 | 6677 | 377 | 48/48 | 69.1% | 6821 ms | 8407 ms |
+| multi_agent_repair | **100.0% (48/48)** | 4.4 | 6689 | 380 | 48/48 | 69.3% | 6505 ms | 8848 ms |
+
+### 结论一：planner 没有解决 `rc_01`，因为“说重试”不等于“真的重试”
+
+`multi_agent` 的计划里明确写了 “retry the GET a few times”，但 executor 没有工具层重试，每次失败仍然消耗一个完整 step：
+
+```
+multi_agent（无重试）
+[0] planner → “retry the GET a few times”
+[1] http_get FAIL
+[2] http_get FAIL
+[3] http_get ok，但 max_steps 已到，没机会写 value.txt → 0/3
+```
+
+`multi_agent_repair` 把重试下沉到工具层，第一步就消化掉两次超时：
+
+```
+multi_agent_repair
+[0] planner → 计划
+[1] http_get ok attempts=3   ← harness 重试在工具层完成
+[2] list_files + write_file ok
+[3] read_file 校验 → 3/3
+```
+
+**计划能提醒模型“该重试”，但只有 harness 能改变“一次失败占不占一个 step”。**
+
+### 结论二：多智能体的成本主要不在 planner 调用本身
+
+planner 只占 **5.6%** token（377/6677），但总 token 比 baseline **+64.7%**、平均步数 +0.7、P50 延迟 **+82.7%**。计划让 executor 多做验证和重读，成本发生在 executor 的步数与上下文，而不是那一次 planner 调用。
+
+### 结论三：planner + repair 能到 48/48，但相对 repair 仍是净成本
+
+- `multi_agent_repair` vs `multi_agent`：成功率 +6.2pp，token 只 +0.2%（repair 把重试压回工具层，抵消了额外 step）；
+- 但对比主实验的 `repair`（4119 token、48/48、P50 3701 ms），多智能体版本多花约 **62% token**，P50 到 6505 ms，成功率没有增量。
+
+**多智能体是一种拓扑，不是 harness 控制策略的替代品。** 在这 16 个短任务上，它的主要产出是“可解释的 handoff 证据”，不是更高的成功率。
+
+### 结论四：handoff 全部成功，但缓存命中率下降
+
+48/48 的 handoff 都产出了非空计划；缓存命中率从 81.7% 降到 69.1%。一个可能的原因是计划让每个任务的 system prompt 不同、可复用的公共前缀变短——这是观察，不是因果结论，后续需要用 cache-aware 调度实验验证。
+
 ## 设计取舍
 
 > 更完整的设计理由、任务构造思路和面试追问准备见 [docs/DESIGN.md](docs/DESIGN.md)。
@@ -280,13 +348,14 @@ cascade 比「始终用强模型」省 15.0% token，成功率相同。
 
 - 16 个合成任务，规模小；成功率不能外推成真实业务能力。
 - 3 次重复只能提示噪声，不是置信区间；要提高统计严谨性需要更多 repeat 和 bootstrap。
-- 任务以单 Agent 为主；多智能体协作是 Roadmap，不是当前卖点。
+- 多智能体只实现了 planner/executor 一种拓扑；没有 solver/verifier、多轮协商或 handoff 失败重试。在这 16 个短任务上它没有提升成功率（总 token +65%），更适合可分解的长任务，而不是短任务。
+- planner 计划质量没有单独评分；`handoff` 成功只代表产出了非空计划，不代表计划正确。
 - Prompt Cache 只记录了命中/未命中 token，没有做 **cache-aware 调度**（例如把共享长前缀的任务排在一起），也没有按真实价格做成本-成功率 Pareto。
 - 没有接真实 OpenManus runtime；当前是自带的轻量 loop，后续会加 adapter。
 
 ## Roadmap
 
-- **Multi-agent**：planner/executor 或 solver/verifier，trace 增加 `agent` 字段与 handoff 指标。
+- **Multi-agent v1（已完成）**：planner/executor + `agent` 字段 + `handoff` 事件 + 失败降级；下一步 solver/verifier、多轮 handoff 与长任务集。
 - **AEvo-lite**：meta-agent 读失败报告，只改一个 prompt/tool 配置，再跑回归集；提升超过噪声才保留。
 - **OpenManus adapter**：同一批任务跑在 OpenManus runtime 上，对比自带 loop 与开源框架的失败模式。
 - **Prompt Cache / 成本**：已记录 cache hit token；下一步做 cache-aware 调度与按真实价格的成本-成功率 Pareto。

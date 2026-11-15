@@ -55,16 +55,23 @@ def render_report(
     lines.append("## 总览")
     lines.append("")
     lines.append(
-        "| 配置 | 成功率 | repeat 标准差 | 平均步数 | 平均 token | 缓存命中率 | P50 延迟 | P95 延迟 | 工具错误率 | recovery 成功率 | 升级率 |"
+        "| 配置 | 成功率 | repeat 标准差 | 平均步数 | 平均 token | planner token | handoff（成功/次数） | 缓存命中率 | P50 延迟 | P95 延迟 | 工具错误率 | recovery 成功率 | 升级率 |"
     )
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for name in specs:
         item = summary.get(name)
         if not item:
             continue
+        handoff_count = item.get("handoff_count", 0)
+        handoff_cell = (
+            f"{item.get('handoff_ok_count', 0)}/{handoff_count}"
+            if handoff_count
+            else "—"
+        )
         lines.append(
             f"| {name} | {_pct(item['success_rate'])} | {_pct(item['success_std'])} | "
             f"{_num(item['avg_steps'])} | {item['avg_tokens']:.0f} | "
+            f"{item.get('avg_planner_tokens', 0.0):.0f} | {handoff_cell} | "
             f"{_pct(item.get('cache_hit_rate', 0.0))} | "
             f"{item['p50_latency_ms']:.0f} ms | {item['p95_latency_ms']:.0f} ms | "
             f"{_pct(item['tool_error_rate'])} | "
@@ -133,6 +140,14 @@ def render_report(
     )
     lines.append(
         "- `工具错误率` = 失败尝试次数 / 工具调用次数；开启自动重试后可能超过 100%，这是预期的。"
+    )
+    lines.append(
+        "- `planner token` 只统计 planner 调用，是总 token 的一部分；"
+        "`handoff` 是 planner→executor 的交接（成功 episode / 有交接的 episode），单 Agent 配置显示 —。"
+    )
+    lines.append(
+        "- planner 调用失败会降级为无计划的 executor，并在 trace 里记 `llm_error`；"
+        "如果 episode 最终失败，归因会标为 `planner_error`。"
     )
     lines.append(
         "- `缓存命中率` = DeepSeek 返回的 `prompt_cache_hit_tokens` /（命中 + 未命中）；"

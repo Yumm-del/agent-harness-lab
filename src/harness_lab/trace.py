@@ -6,6 +6,7 @@
   llm_call      — 每一步发给模型的 messages、模型返回、usage、延迟
   tool_call     — 工具名、参数、成功/失败、重试次数、错误
   repair_hint   — harness 注入的修复提示（如果配置开启）
+  handoff       — planner → executor 的交接（多智能体配置）
   final         — 最终答案与停止原因
   episode_end   — 通过/失败、失败分类、总耗时
 
@@ -128,18 +129,35 @@ def trace_stats(events: list[dict]) -> dict:
 
     这些计数不依赖 evaluator 的最终结果，回放时也能独立算出来：
       llm_calls / tool_calls / tool_errors / repair_hints
+      planner_calls / executor_calls / handoffs / planner_tokens
       repeated_failed_actions — 同一工具 + 同一参数连续失败 ≥ 2 次
     """
     llm_calls = 0
     tool_calls = 0
     tool_errors = 0
     repair_hints = 0
+    planner_calls = 0
+    executor_calls = 0
+    handoffs = 0
+    handoffs_ok = 0
+    planner_tokens = 0
     failed_action_counts: dict[str, int] = {}
 
     for event in events:
         kind = event.get("event")
         if kind == "llm_call":
             llm_calls += 1
+            agent = str(event.get("agent", "executor"))
+            if agent == "planner":
+                planner_calls += 1
+                planner_tokens += int(event.get("prompt_tokens", 0) or 0)
+                planner_tokens += int(event.get("completion_tokens", 0) or 0)
+            else:
+                executor_calls += 1
+        elif kind == "handoff":
+            handoffs += 1
+            if event.get("ok", False):
+                handoffs_ok += 1
         elif kind == "tool_call":
             tool_calls += 1
             attempts = int(event.get("failed_attempts", 0) or 0)
@@ -156,5 +174,10 @@ def trace_stats(events: list[dict]) -> dict:
         "tool_calls": tool_calls,
         "tool_errors": tool_errors,
         "repair_hints": repair_hints,
+        "planner_calls": planner_calls,
+        "executor_calls": executor_calls,
+        "handoffs": handoffs,
+        "handoffs_ok": handoffs_ok,
+        "planner_tokens": planner_tokens,
         "repeated_failed_actions": repeated_failed_actions,
     }

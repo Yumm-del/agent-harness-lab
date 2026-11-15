@@ -75,6 +75,10 @@ def classify_failure(
     stats = trace_stats(events)
     if output.stopped_reason == "llm_error":
         return "llm_error"
+    # planner 没产出计划时 executor 是降级运行的；如果最终失败，
+    # 根因应归到交接层，而不是笼统地归到 executor 的规划/输出问题。
+    if output.handoff_count > 0 and not output.handoff_ok:
+        return "planner_error"
     if output.stopped_reason == "max_steps":
         return "step_limit"
     if stats["llm_calls"] == 0:
@@ -159,6 +163,9 @@ def run_episode(
             tool_calls=output.tool_calls,
             tool_errors=output.tool_errors,
             recovery_events=output.recovery_events,
+            planner_tokens=output.planner_tokens,
+            handoff_count=output.handoff_count,
+            handoff_ok=output.handoff_ok,
         )
 
     return EpisodeResult(
@@ -181,6 +188,9 @@ def run_episode(
         stopped_reason=output.stopped_reason,
         trace_path=str(trace_path.relative_to(run_root)),
         workspace=str(workspace.relative_to(run_root)),
+        planner_tokens=output.planner_tokens,
+        handoff_count=output.handoff_count,
+        handoff_ok=output.handoff_ok,
     )
 
 
@@ -317,6 +327,11 @@ def run_cascade_episode(
         f"弱配置 {weak_spec.name} 失败（{weak.failure_type}），"
         f"升级到 {strong_spec.name}：{strong.detail}"
     )
+    # cascade 的一次 episode 可能发生两次 handoff（弱、强各一次）；
+    # 报告按「episode 是否有交接」计数，只有全部交接成功才算成功。
+    handoff_flags = [
+        item.handoff_ok for item in (weak, strong) if item.handoff_count > 0
+    ]
     return replace(
         strong,
         spec_name="cascade",
@@ -328,6 +343,9 @@ def run_cascade_episode(
         tool_calls=weak.tool_calls + strong.tool_calls,
         tool_errors=weak.tool_errors + strong.tool_errors,
         recovery_events=weak.recovery_events + strong.recovery_events,
+        planner_tokens=weak.planner_tokens + strong.planner_tokens,
+        handoff_count=1 if handoff_flags else 0,
+        handoff_ok=all(handoff_flags) if handoff_flags else False,
         escalated=True,
     )
 
@@ -464,6 +482,11 @@ def aggregate(results: Iterable[EpisodeResult]) -> dict[str, dict[str, Any]]:
         recovery_passed = sum(1 for item in recovery_items if item.passed)
         escalations = sum(1 for item in items if item.escalated)
 
+        total_tokens = sum(item.usage.total_tokens for item in items)
+        planner_tokens = sum(item.planner_tokens for item in items)
+        handoff_items = [item for item in items if item.handoff_count > 0]
+        handoff_ok_count = sum(1 for item in handoff_items if item.handoff_ok)
+
         latencies = [item.latency_ms for item in items]
         summary[spec_name] = {
             "total": total,
@@ -471,8 +494,19 @@ def aggregate(results: Iterable[EpisodeResult]) -> dict[str, dict[str, Any]]:
             "success_rate": passed / total if total else 0.0,
             "success_std": statistics.pstdev(per_repeat) if len(per_repeat) > 1 else 0.0,
             "avg_steps": statistics.mean(item.steps for item in items) if items else 0.0,
-            "avg_tokens": statistics.mean(item.usage.total_tokens for item in items) if items else 0.0,
-            "total_tokens": sum(item.usage.total_tokens for item in items),
+            "avg_tokens": total_tokens / total if total else 0.0,
+            "total_tokens": total_tokens,
+            # 多智能体：planner token 是总 token 的子集，不是额外叠加。
+            # handoff 按 episode 计数（单 Agent 配置为 0），成功率高表示
+            # planner 确实产出了非空计划，而不是模型调用失败后的降级运行。
+            "planner_tokens": planner_tokens,
+            "avg_planner_tokens": planner_tokens / total if total else 0.0,
+            "planner_token_rate": planner_tokens / total_tokens if total_tokens else 0.0,
+            "handoff_count": len(handoff_items),
+            "handoff_ok_count": handoff_ok_count,
+            "handoff_success_rate": (
+                handoff_ok_count / len(handoff_items) if handoff_items else 0.0
+            ),
             "cache_hit_tokens": sum(item.usage.cache_hit_tokens for item in items),
             "cache_miss_tokens": sum(item.usage.cache_miss_tokens for item in items),
             # 命中率 = 命中 /（命中 + 未命中）。服务不返回缓存字段时两者都是 0，

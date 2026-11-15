@@ -177,10 +177,20 @@ def _cmd_show_trace(args: argparse.Namespace) -> int:
             response = event.get("response", {})
             calls = response.get("tool_calls", [])
             names = ", ".join(call.get("name", "?") for call in calls) or "(final)"
-            print(f"[{step}] llm_call → {names}  tokens={response.get('usage', {}).get('total_tokens', 0)}")
+            agent = "planner " if event.get("agent") == "planner" else ""
+            print(
+                f"[{step}] {agent}llm_call → {names}  "
+                f"tokens={response.get('usage', {}).get('total_tokens', 0)}"
+            )
         elif kind == "tool_call":
             status = "ok" if event.get("ok") else "FAIL"
             print(f"[{step}] tool_call {event.get('name')} {status}  attempts={event.get('attempts')}")
+        elif kind == "handoff":
+            plan = str(event.get("plan", "")).replace("\n", " ")
+            print(
+                f"[{step}] handoff planner→executor ok={event.get('ok')}  "
+                f"plan={plan[:80]}"
+            )
         elif kind in {"repair_hint", "max_steps", "llm_error"}:
             print(f"[{step}] {kind}  {event.get('error', '')}")
         elif kind == "final":

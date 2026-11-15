@@ -159,6 +159,10 @@ class RunOutput:
     tool_errors: int
     recovery_events: int
     stopped_reason: str
+    # 多智能体：planner 调用消耗的 token、交接次数、planner 是否成功产出计划
+    planner_tokens: int = 0
+    handoff_count: int = 0
+    handoff_ok: bool = False
     messages: list[dict] = field(default_factory=list)
 
 
@@ -186,6 +190,9 @@ class EpisodeResult:
     trace_path: str
     workspace: str
     escalated: bool = False
+    planner_tokens: int = 0
+    handoff_count: int = 0
+    handoff_ok: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -209,4 +216,7 @@ class EpisodeResult:
             "trace_path": self.trace_path,
             "workspace": self.workspace,
             "escalated": self.escalated,
+            "planner_tokens": self.planner_tokens,
+            "handoff_count": self.handoff_count,
+            "handoff_ok": self.handoff_ok,
         }

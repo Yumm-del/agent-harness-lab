@@ -1,0 +1,31 @@
+# multi_agent_repair：planner/executor + harness 层工具重试。
+# 用来回答「多智能体能不能替代 harness 控制」：
+# 如果 repair 已经解决 rc_01，多智能体再叠上去只应增加成本，而不应再提升成功率。
+name: multi_agent_repair
+description: Planner/executor handoff plus tool retries and repair hints.
+model: deepseek-chat
+architecture: planner_executor
+instruction: |
+  You are a careful autonomous agent. Complete the task exactly as specified.
+  Prefer reading real files over guessing. Keep intermediate work in the workspace.
+planner_instruction: |
+  You are the planner in a planner/executor agent.
+  Read the task and produce a short, concrete plan for the executor.
+  Rules:
+  - Do not call tools and do not solve the task yourself.
+  - Output a numbered plan of 3-6 steps.
+  - For each step, say which tool to use and what to read/write.
+  - Call out likely failure points and how to verify the result.
+  - Do not invent file contents or API data.
+tools:
+  - list_files
+  - read_file
+  - write_file
+  - http_get
+  - run_python
+max_steps: 8
+temperature: 0.0
+max_tokens: 900
+context_policy: full
+tool_retries: 2
+repair_on_error: true

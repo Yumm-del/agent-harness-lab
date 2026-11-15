@@ -9,6 +9,10 @@
 
 这样对比实验不是「改代码」，而是「换一个 YAML」；
 trace 里记录完整 spec，回放时才能重建同一次运行。
+
+architecture 是第五个轴：
+  single             — 一个 agent 跑完 loop（默认，兼容旧配置）
+  planner_executor   — planner 先出计划，executor 再执行；trace 记录 handoff
 """
 
 from __future__ import annotations
@@ -35,6 +39,8 @@ class AgentSpec:
     context_window: int = 4            # prune 时保留最近多少个 tool observation
     tool_retries: int = 0              # harness 层自动重试次数
     repair_on_error: bool = False      # 工具失败后是否注入修复提示
+    architecture: str = "single"       # single | planner_executor
+    planner_instruction: str = ""      # planner_executor 时 planner 的 system prompt
     description: str = ""
 
     def __post_init__(self) -> None:
@@ -56,6 +62,8 @@ class AgentSpec:
             raise ValueError("context_window 必须 >= 1")
         if not 0 <= self.tool_retries <= 5:
             raise ValueError("tool_retries 必须在 0..5 之间")
+        if self.architecture not in {"single", "planner_executor"}:
+            raise ValueError("architecture 只支持 single / planner_executor")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AgentSpec":
@@ -77,6 +85,8 @@ class AgentSpec:
             context_window=int(data.get("context_window", 4)),
             tool_retries=int(data.get("tool_retries", 0)),
             repair_on_error=bool(data.get("repair_on_error", False)),
+            architecture=str(data.get("architecture", "single")),
+            planner_instruction=str(data.get("planner_instruction", "")),
             description=str(data.get("description", "")),
         )
 

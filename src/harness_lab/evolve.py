@@ -120,6 +120,11 @@ def write_spec(spec: AgentSpec, path: str | Path) -> Path:
         "tool_retries": spec.tool_retries,
         "repair_on_error": spec.repair_on_error,
     }
+    # 只在非默认时写出，避免给旧的单 Agent 配置平白增加两行。
+    if spec.architecture != "single":
+        data["architecture"] = spec.architecture
+    if spec.planner_instruction:
+        data["planner_instruction"] = spec.planner_instruction
     target.write_text(
         yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
         encoding="utf-8",

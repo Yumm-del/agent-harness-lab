@@ -130,15 +130,83 @@ evolved 与 repair 是同一份配置（只差 name/description），两次独�
 - 但 3 次升级全部发生在 `rc_01`，且**全部失败**（5642 / 5650 / 5767 token 纯属浪费）；
 - 路由只解决「任务难度不匹配」，不解决「harness 缺重试」。两者是不同层面的问题。
 
-## 7. 读表注意
+## 7. 多智能体对照（2026-11-15）
+
+运行目录：`results/multi_agent/20261115-184940/`，3 配置 × 16 任务 × 3 次重复 = 144 个 episode，并发 4，总耗时 206.76 s。
+
+配置：
+
+- `multi_agent`：baseline + planner；planner 先输出 3–6 步计划，executor 把计划放进 system prompt 后走完全相同的 loop；
+- `multi_agent_repair`：`multi_agent` + `tool_retries=2` + `repair_on_error=true`。
+
+### 总表
+
+| 配置 | 成功率 | 平均步数 | 平均 token/任务 | planner token | handoff | 缓存命中率 | P50 延迟 | P95 延迟 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline | 93.8% (45/48) | 3.8 | 4053 | — | — | 81.7% | 3734 ms | 4800 ms |
+| multi_agent | 93.8% (45/48) | 4.5 | 6677 | 377 | 48/48 | 69.1% | 6821 ms | 8407 ms |
+| multi_agent_repair | **100.0% (48/48)** | 4.4 | 6689 | 380 | 48/48 | 69.3% | 6505 ms | 8848 ms |
+
+逐任务看，15 个任务在三个配置下全部 3/3；差异仍然只来自 `rc_01_timeout_retry`。
+
+### `multi_agent`：计划说了重试，但没有工具层重试
+
+```
+[0] planner → “retry the GET a few times”
+[1] http_get FAIL
+[2] http_get FAIL
+[3] http_get ok，但 max_steps 已到，没机会写 value.txt → 0/3
+```
+
+`multi_agent` 与 baseline 一样是 45/48。planner 能提醒“该重试”，但每次失败仍然消耗一个完整 step，步数预算用完就没法写文件。
+
+### `multi_agent_repair`：重试下沉到工具层
+
+```
+[0] planner → 计划
+[1] http_get ok attempts=3   ← harness 在同一 step 内消化两次超时
+[2] list_files + write_file ok
+[3] read_file 校验 → 3/3
+```
+
+同样是 3 步，但第 1 步就拿到了结果，所以 48/48。
+
+### 成本：planner 只占 5.6%，大头在 executor
+
+`multi_agent` 相比 baseline：
+
+- 总 token 4053 → 6677（**+64.7%**）；
+- 平均步数 3.8 → 4.5（+0.7）；
+- P50 3734 → 6821 ms（**+82.7%**）；
+- planner 调用本身只有 377 token，占总 token 的 **5.6%**。
+
+所以成本主要不是“多调用了一次模型”，而是计划让 executor 多做验证/重读，步数和上下文都变长。这一点只看 token 总量容易误判。
+
+`multi_agent_repair` 对比主实验的 `repair`（4119 token、48/48、P50 3701 ms）：
+
+- token 6689 vs 4119（约 **+62%**）；
+- P50 6505 vs 3701 ms（约 **+76%**）；
+- 成功率相同（都是 48/48）。
+
+**结论：多智能体是拓扑，不是 harness 控制策略的替代品。** 在这套短任务上，它没有带来成功率增量，反而增加协调成本。
+
+### handoff 与缓存
+
+- 48/48 的 handoff 都产出了非空计划；
+- 缓存命中率从 81.7% 降到 69.1%，一个可能的解释是计划让每个任务的 system prompt 不同、可复用的公共前缀变短；这是观察，不是因果结论；
+- `handoff ok` 只表示 planner 产出了非空计划，**不表示计划正确**。计划质量需要单独评分，这是后续工作。
+
+## 8. 读表注意
 
 - 16 个合成任务，规模小；成功率不能外推成真实业务能力。
 - `repeat 标准差` 在 3 次重复下基本是 0（temperature=0 本身就是确定性的），它只能提示噪声，不是置信区间。
 - `工具错误率` = 失败尝试次数 / 工具调用次数。开启重试后这个比率会上升，因为失败尝试也被计入——这是指标定义，不代表工具质量变差。
+- `planner token` 只统计 planner 调用，是总 token 的子集；`handoff` 是 planner→executor 的交接（成功 episode / 有交接的 episode），单 Agent 配置不适用。
+- planner 调用失败会降级为无计划的 executor；如果 episode 最终失败，失败类型为 `planner_error`，而不是笼统的 `planning_no_tool`。
 - `缓存命中率` = `prompt_cache_hit_tokens` /（命中 + 未命中），由 DeepSeek 返回。四个配置都在 79%–82%，因为 agent loop 每步重发同一段不断增长的前缀。项目不把命中的 token 折算成金额，避免使用会过时的价格。
 - `prune` 与 baseline 结果完全相同：裁剪只在 26/181 次 LLM 调用中真正触发，且被裁掉的都是可重读的中间结果。要验证裁剪价值，需要构造 observation 很长（大文件、长日志）的任务。
 
-## 8. 复现
+## 9. 复现
 
 ```bash
 cd D:\file_of_claude\agent-harness-lab
@@ -152,6 +220,11 @@ python -m harness_lab eval \
 # AEvo-lite 闭环
 python -m harness_lab evolve --from results/main/<run_id>/results.json --spec baseline --out configs/evolved.yaml
 python -m harness_lab eval --specs configs/evolved.yaml --repeat 3 --concurrency 4 --out results/evolved
+
+# 多智能体对照（144 episodes）
+python -m harness_lab eval \
+  --specs configs/baseline.yaml configs/multi_agent.yaml configs/multi_agent_repair.yaml \
+  --repeat 3 --concurrency 4 --out results/multi_agent
 
 # 模型级联
 python -m harness_lab cascade --weak configs/baseline.yaml --strong configs/reasoner.yaml \
