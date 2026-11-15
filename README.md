@@ -1,5 +1,7 @@
 # agent-harness-lab
 
+[![tests](https://github.com/Yumm-del/agent-harness-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/Yumm-del/agent-harness-lab/actions/workflows/ci.yml)
+
 > 一个 trace-first 的 Agent Harness 实验场：把 Agent 的运行过程变成可评测、可归因、可回放、可迭代的数据。
 
 这不是又一个 Agent 产品 demo。它解决的是 harness 工程里的一个核心问题：
