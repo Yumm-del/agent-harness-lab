@@ -22,6 +22,10 @@ class Usage:
     completion_tokens: int = 0
     total_tokens: int = 0
     calls: int = 0
+    # DeepSeek 的上下文缓存字段：命中部分按更低价计费。
+    # 部分兼容服务不返回，缺失时保持 0，不伪造成本数据。
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
 
     def add(self, other: "Usage") -> None:
         """把另一份 usage 累加进来（原地修改）。"""
@@ -29,6 +33,8 @@ class Usage:
         self.completion_tokens += other.completion_tokens
         self.total_tokens += other.total_tokens
         self.calls += other.calls
+        self.cache_hit_tokens += other.cache_hit_tokens
+        self.cache_miss_tokens += other.cache_miss_tokens
 
     @classmethod
     def from_api(cls, usage: Any) -> "Usage":
@@ -43,7 +49,13 @@ class Usage:
         def pick(name: str) -> int:
             if isinstance(usage, dict):
                 return int(usage.get(name, 0) or 0)
-            return int(getattr(usage, name, 0) or 0)
+            value = getattr(usage, name, None)
+            if value is None:
+                # OpenAI SDK 的 pydantic 模型会把未声明字段放进 model_extra，
+                # DeepSeek 的 cache 字段通常走这里，不能只用 getattr。
+                extra = getattr(usage, "model_extra", None) or {}
+                value = extra.get(name, 0)
+            return int(value or 0)
 
         prompt = pick("prompt_tokens")
         completion = pick("completion_tokens")
@@ -53,6 +65,8 @@ class Usage:
             completion_tokens=completion,
             total_tokens=total,
             calls=1,
+            cache_hit_tokens=pick("prompt_cache_hit_tokens"),
+            cache_miss_tokens=pick("prompt_cache_miss_tokens"),
         )
 
     def to_dict(self) -> dict:

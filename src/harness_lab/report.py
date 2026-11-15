@@ -55,9 +55,9 @@ def render_report(
     lines.append("## 总览")
     lines.append("")
     lines.append(
-        "| 配置 | 成功率 | repeat 标准差 | 平均步数 | 平均 token | P50 延迟 | P95 延迟 | 工具错误率 | recovery 成功率 | 升级率 |"
+        "| 配置 | 成功率 | repeat 标准差 | 平均步数 | 平均 token | 缓存命中率 | P50 延迟 | P95 延迟 | 工具错误率 | recovery 成功率 | 升级率 |"
     )
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for name in specs:
         item = summary.get(name)
         if not item:
@@ -65,6 +65,7 @@ def render_report(
         lines.append(
             f"| {name} | {_pct(item['success_rate'])} | {_pct(item['success_std'])} | "
             f"{_num(item['avg_steps'])} | {item['avg_tokens']:.0f} | "
+            f"{_pct(item.get('cache_hit_rate', 0.0))} | "
             f"{item['p50_latency_ms']:.0f} ms | {item['p95_latency_ms']:.0f} ms | "
             f"{_pct(item['tool_error_rate'])} | "
             f"{_pct(item['recovery_success'])} ({item['recovery_passed']}/{item['recovery_total']}) | "
@@ -132,6 +133,10 @@ def render_report(
     )
     lines.append(
         "- `工具错误率` = 失败尝试次数 / 工具调用次数；开启自动重试后可能超过 100%，这是预期的。"
+    )
+    lines.append(
+        "- `缓存命中率` = DeepSeek 返回的 `prompt_cache_hit_tokens` /（命中 + 未命中）；"
+        "服务未返回该字段时显示 0.0%，不能据此推断「没有缓存」。"
     )
     lines.append(
         "- 每个 episode 的完整 messages、tool call、错误与 token 都在对应 `trace.jsonl` 里。"

@@ -473,6 +473,20 @@ def aggregate(results: Iterable[EpisodeResult]) -> dict[str, dict[str, Any]]:
             "avg_steps": statistics.mean(item.steps for item in items) if items else 0.0,
             "avg_tokens": statistics.mean(item.usage.total_tokens for item in items) if items else 0.0,
             "total_tokens": sum(item.usage.total_tokens for item in items),
+            "cache_hit_tokens": sum(item.usage.cache_hit_tokens for item in items),
+            "cache_miss_tokens": sum(item.usage.cache_miss_tokens for item in items),
+            # 命中率 = 命中 /（命中 + 未命中）。服务不返回缓存字段时两者都是 0，
+            # 这里保持 0.0 而不是推断成「没有缓存」。
+            "cache_hit_rate": (
+                sum(item.usage.cache_hit_tokens for item in items)
+                / max(
+                    1,
+                    sum(
+                        item.usage.cache_hit_tokens + item.usage.cache_miss_tokens
+                        for item in items
+                    ),
+                )
+            ),
             "avg_latency_ms": statistics.mean(latencies) if latencies else 0.0,
             "p50_latency_ms": _percentile(latencies, 0.50),
             "p95_latency_ms": _percentile(latencies, 0.95),

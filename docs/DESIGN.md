@@ -151,7 +151,7 @@ trace 的设计目标是「能回放、能归因」，不是「日志好看」�
 2. **AEvo-lite**：meta-agent 读失败报告，只改一个配置，再跑回归集；提升超过噪声才保留。
 3. **Multi-agent**：planner/executor 或 solver/verifier，trace 增加 `agent` 字段和 handoff 指标。
 4. **Held-out 任务**：dev/test 拆分，避免在测试集上调 harness。
-5. **Prompt Cache / 成本**：记录 cache hit token，做成本-成功率 Pareto。
+5. **Prompt Cache / 成本**：已记录 cache hit token；下一步做 cache-aware 调度与按真实价格的成本-成功率 Pareto。
 
 ## 10. 面试时应该能回答的问题
 
